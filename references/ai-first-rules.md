@@ -6,7 +6,7 @@ This document is the canonical specification. It lives at `references/ai-first-r
 
 ---
 
-## The 7 Rules
+## The 8 Rules
 
 ### 1. Self-contained context
 Each note must explain itself. Future-Claude may pull this single note via `/obsidian-find` or vault scan with no surrounding context. Don't rely on backlinks alone for meaning. State the *what*, the *why*, and the *when* inside the note itself.
@@ -66,11 +66,20 @@ Where applicable, mark claims with confidence:
 
 Use this in frontmatter (`confidence: high`) or inline (`(confidence: speculation)`).
 
+### 8. Importance
+Mark how much a note is worth keeping and surfacing — its *salience*. This is a **different axis from confidence**: confidence is how sure we are a note is true; importance is how much it matters. A `speculation`-confidence idea can still be `high` importance, and a `verified` fact can be `low`. The two are orthogonal — never conflate them.
+
+- `high` — load-bearing / identity / active work worth surfacing on sight (world, values, live projects, key people, operating knowledge).
+- `medium` — useful, situational. The default; most notes.
+- `low` — ephemeral, prune-first (quick captures, one-off logs, superseded drafts).
+
+Set in frontmatter: `importance: high`. Optional — a note with no `importance` field is treated as `medium`.
+
 ---
 
 ## Anti-fabrication and search-completeness (hard rules)
 
-Rules 1-7 govern how a note is written. These govern how Claude reads and reasons over the vault before writing. They are non-negotiable because the failure modes below silently corrupt the vault's value as a memory.
+Rules 1-8 govern how a note is written. These govern how Claude reads and reasons over the vault before writing. They are non-negotiable because the failure modes below silently corrupt the vault's value as a memory.
 
 ### False absence (the most common failure mode)
 Never assert that a note, person, project, or file does NOT exist without an exhaustive search first. Saying "no note exists" when one does is the single most common observed failure - more common than fabrication. Verify presence or absence by listing and grepping the vault, not from memory or a single lucky query. Search by every plausible name, alias, and folder before concluding something is missing. When unsure, over-include and label the uncertainty rather than under-report.
