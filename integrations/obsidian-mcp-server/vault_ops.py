@@ -64,6 +64,26 @@ _SEARCH_ENTITY_BOOST = float(os.environ.get("OBSIDIAN_SEARCH_ENTITY_BOOST") or "
 _LOG_TYPES = {"log", "dev-log", "daily", "worklog"}
 _ENTITY_TYPES = {"person", "entity"}
 _LOG_FOLDERS = {"logs", "daily", "dev logs"}
+# Draft / scaffolding / navigation notes are real content but are almost never the
+# *canonical answer* to a knowledge query: publishing drafts (Writing/), pending-review
+# inbox items (_Inbox/), read-captures (Research/X-reads/), and the operating manual /
+# dashboards themselves (_CLAUDE.md, Today.md, index.md, hot.md). On the curated eval
+# (2026-07-22) these outranked canonical wiki notes at ranks 4-7 - and crucially they
+# won via the SEMANTIC arm, so the lexical-only de-weight above could not touch them.
+# This penalty is therefore applied BOTH in the lexical pass AND post-fusion
+# (_freshness_rerank). Moderate fade (findable, cannot outrank canon on merit); env-
+# tunable to 1.0 to disable for A/B. Measured: lifts recall@3 without hurting recall@10.
+_SEARCH_SCAFFOLD_PREFIXES = ("Writing/", "_Inbox/", "Research/X-reads/")
+_SEARCH_SCAFFOLD_FILES = {"_CLAUDE.md", "Today.md", "index.md", "hot.md"}
+_SEARCH_SCAFFOLD_FACTOR = float(os.environ.get("OBSIDIAN_SEARCH_SCAFFOLD_DEWEIGHT") or "0.4")
+
+
+def _scaffold_deweight(rel: str) -> float:
+    """Multiplicative penalty for draft/scaffolding/navigation notes (see above).
+    By PATH only (no content read), so it is cheap enough for the post-fusion rerank."""
+    if rel in _SEARCH_SCAFFOLD_FILES or rel.startswith(_SEARCH_SCAFFOLD_PREFIXES):
+        return _SEARCH_SCAFFOLD_FACTOR
+    return 1.0
 # Freshness (stress-test fix 15/24): a "what is CURRENT" query ranked a
 # superseded/declined note above the one that still holds. Two levers, lexical arm only (the
 # semantic arm rejected additive nudges by measurement in fix 13):
@@ -104,7 +124,14 @@ def _freshness_rerank(results, vault: Path, current_intent: bool):
     present. Rank-derived base scores keep this a reorder, never a rewrite."""
     rescored = []
     for i, r in enumerate(results):
-        weight = 1.0
+        # Path-based penalties the semantic arm is blind to (it scores pure cosine):
+        # the same draft/scaffolding fade AND the existing raw/ + log.md de-weight,
+        # applied here post-fusion so a raw source or log can't ride a strong cosine
+        # match above the canonical note (measured: Pentest Teammate lost to raw/PRD
+        # via fusion until this was added). Reorder only - never deletes a result.
+        weight = _scaffold_deweight(r["path"])
+        if r["path"] in _SEARCH_DEWEIGHT_FILES or r["path"].startswith(_SEARCH_DEWEIGHT_PREFIXES):
+            weight *= _SEARCH_DEWEIGHT_FACTOR
         try:
             head = (vault / r["path"]).read_text(encoding="utf-8-sig", errors="ignore")[:400]
             sm = _STATUS_RE.search(head)
@@ -249,13 +276,40 @@ def _load_index_cached(index_path: Path) -> dict:
     return _INDEX_CACHE["index"]
 
 
+# Loud-once degradation flag (issue: a running index + a DOWN Ollama silently
+# reverted default search to lexical-only - "no error, just worse recall"). When an
+# index EXISTS (embeddings were set up, so semantic is EXPECTED) but the backend is
+# unreachable, warn ONCE per process on stderr - matching the truncation-warning
+# convention above - so the degraded state is visible in the MCP/server logs instead
+# of silent. A vault that never built an index stays silent (semantic not expected).
+_SEMANTIC_DEGRADED_WARNED = False
+
+
+def _warn_semantic_degraded(reason: str) -> None:
+    global _SEMANTIC_DEGRADED_WARNED
+    if _SEMANTIC_DEGRADED_WARNED:
+        return
+    _SEMANTIC_DEGRADED_WARNED = True
+    print(
+        f"warning: semantic index present but UNAVAILABLE ({reason}); search is "
+        f"falling back to LEXICAL-ONLY ranking (lower recall - e.g. recall@10 ~82% "
+        f"vs ~95% fused on the curated eval). Backend={_EMBED_BACKEND} at {_EMBED_URL}. "
+        f"If using Ollama: `brew services start ollama` (then queries auto-recover).",
+        file=sys.stderr,
+    )
+
+
 def _semantic_fuse(
     query: str, lexical: List[Dict[str, Any]], vault: Path, limit: int,
     enabled: Optional[bool] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """Fuse lexical results with local semantic ranking via RRF. Returns None (so the
     caller uses pure lexical) whenever semantic is unavailable or anything fails.
-    enabled overrides the env toggle for this call (None = follow the env)."""
+    enabled overrides the env toggle for this call (None = follow the env).
+
+    When an index exists but the embedding backend is down, this still falls back to
+    lexical (search never breaks) but emits a one-time stderr warning via
+    _warn_semantic_degraded - the degradation is no longer silent."""
     if not (_SEMANTIC_ENABLED if enabled is None else enabled):
         return None
     index_path = vault / _SEMANTIC_INDEX_FILE
@@ -270,6 +324,9 @@ def _semantic_fuse(
         # vectors from different models live in different spaces (fix 16/24).
         qvec = _embed_query(query, model=index.get("model") or _EMBED_MODEL)
         if not qvec:
+            # Index present but the backend returned no vector (bad response / model
+            # not pulled) - a real degradation, so make it visible, then fall back.
+            _warn_semantic_degraded("embedding backend returned no vector")
             return None
         # Best-chunk scoring (fix 13/24): a note is as relevant as its most
         # relevant section, not the average of everything it contains.
@@ -303,8 +360,12 @@ def _semantic_fuse(
         for r in out:
             r.pop("score", None)
         return out
-    except Exception:
-        return None  # any failure -> pure lexical, never break search
+    except Exception as e:
+        # Index existed (checked above) but fusion failed - most commonly the
+        # embedding backend being DOWN (_embed_query raises connection-refused with
+        # no internal catch). Surface it once, then fall back to lexical (never break).
+        _warn_semantic_degraded(f"{type(e).__name__}: {e}")
+        return None
 
 
 def search(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> List[Dict[str, Any]]:
@@ -366,6 +427,7 @@ def search(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> Li
                 score *= _SEARCH_DEWEIGHT_FACTOR
             else:
                 score *= _type_weight(rel, text)
+            score *= _scaffold_deweight(rel)  # draft/scaffolding fade (also applied post-fusion)
             sm = _STATUS_RE.search(text[:400])
             if sm and sm.group(1).lower() in _STALE_STATUSES:
                 score *= _STATUS_FADE
@@ -565,13 +627,65 @@ def backlinks(target: str) -> Dict[str, Any]:
     return {"target": stem, "count": len(refs), "backlinks": sorted(refs)}
 
 
+def _probe_embed_backend() -> Dict[str, Any]:
+    """Best-effort reachability probe for the embedding backend (cheap, 3s timeout).
+    For Ollama, also reports whether the index's model is actually pulled."""
+    info: Dict[str, Any] = {"backend": _EMBED_BACKEND, "url": _EMBED_URL, "model": _EMBED_MODEL}
+    try:
+        if _EMBED_BACKEND == "ollama":
+            with urllib.request.urlopen(f"{_OLLAMA_URL}/api/tags", timeout=3) as r:
+                tags = json.loads(r.read())
+            models = [m.get("name", "") for m in (tags.get("models") or [])]
+            info["reachable"] = True
+            info["model_pulled"] = any(m == _EMBED_MODEL or m.startswith(_EMBED_MODEL + ":")
+                                       or m.startswith(_EMBED_MODEL) for m in models)
+        else:
+            info["reachable"] = None  # non-ollama backends not probed (may need auth)
+    except Exception as e:
+        info["reachable"] = False
+        info["error"] = f"{type(e).__name__}: {e}"
+    return info
+
+
+def _retrieval_health(vault: Path) -> Dict[str, Any]:
+    """Report whether meaning-based (semantic) retrieval is actually live, so a
+    silently-degraded search (index built but Ollama down -> lexical-only, lower
+    recall) shows up in a health check, not only in the MCP server's stderr."""
+    if not _SEMANTIC_ENABLED:
+        return {"mode": "lexical-only", "status": "ok",
+                "reason": "semantic disabled (OBSIDIAN_SEARCH_SEMANTIC=0)"}
+    if not (vault / _SEMANTIC_INDEX_FILE).exists():
+        return {"mode": "lexical-only", "status": "ok",
+                "reason": "no semantic index built; run scripts/eval/semantic_search.py "
+                          "--path <vault> --build to enable meaning-based retrieval"}
+    probe = _probe_embed_backend()
+    out: Dict[str, Any] = {"index_present": True, "backend": probe}
+    reachable, pulled = probe.get("reachable"), probe.get("model_pulled")
+    if reachable is True and pulled is not False:
+        out.update(mode="hybrid (lexical + semantic)", status="ok")
+    elif reachable is True and pulled is False:
+        out.update(mode="lexical-only (fallback)", status="degraded",
+                   warning=f"index was built with '{_EMBED_MODEL}' but that model is not "
+                           f"pulled; run: ollama pull {_EMBED_MODEL}")
+    elif reachable is False:
+        out.update(mode="lexical-only (fallback)", status="degraded",
+                   warning=f"semantic index present but backend UNREACHABLE at {_EMBED_URL} "
+                           f"- search silently degraded to LEXICAL-only (lower recall). "
+                           f"If using Ollama: `brew services start ollama`")
+    else:  # reachable is None -> non-ollama backend, not probed
+        out.update(mode="hybrid (if backend up)", status="unknown",
+                   warning="reachability not probed for non-ollama backends")
+    return out
+
+
 def vault_health() -> Dict[str, Any]:
     """Bounded structural health summary of the vault.
 
     Reports counts plus capped samples of orphan notes (no inbound or outbound
     links), wanted notes (a link exists but the target note does not - a
-    wishlist, not an error), and notes with no frontmatter. Bounded by the same
-    file cap as search so it stays fast.
+    wishlist, not an error), and notes with no frontmatter, plus a retrieval
+    health block (is semantic search actually live, or silently lexical-only).
+    Bounded by the same file cap as search so it stays fast.
     """
     vault = resolve_vault()
     index = _stem_index(vault)
@@ -606,6 +720,7 @@ def vault_health() -> Dict[str, Any]:
         "orphans": {"count": len(orphans), "sample": sorted(orphans)[:10]},
         "wanted_notes": {"count": len(wanted), "sample": wanted},
         "missing_frontmatter": {"count": len(missing_fm), "sample": missing_fm},
+        "retrieval": _retrieval_health(vault),
     }
 
 
