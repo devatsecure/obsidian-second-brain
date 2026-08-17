@@ -18,7 +18,10 @@
         "mcp",
         "python",
         "${CLAUDE_PLUGIN_ROOT}/integrations/obsidian-mcp-server/server.py"
-      ]
+      ],
+      "env": {
+        "OBSIDIAN_USAGE_LOG": "/Users/waseemahmed/Repos/secure-vault-automation/logs/vault-usage.jsonl"
+      }
     }
   }
 }

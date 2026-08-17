@@ -16,7 +16,7 @@ import os
 import re
 import sys
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -368,7 +368,7 @@ def _semantic_fuse(
         return None
 
 
-def search(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> List[Dict[str, Any]]:
+def _search_impl(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> List[Dict[str, Any]]:
     """Bounded keyword search over vault markdown, fused with local semantic search
     when an embedding index + Ollama are available (else pure lexical).
 
@@ -455,6 +455,66 @@ def search(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> Li
     return scored[:limit]
 
 
+# ---------------------------------------------------------------- usage signal
+# WHY THIS EXISTS
+# ---------------
+# Retrieval here is semantic+lexical only: a note written once and never useful
+# again ranks identically to one that answers a question every week. There was no
+# record anywhere of which notes actually get retrieved or read -- audited
+# 2026-08-17, the only grep hit for `access_count` in the whole estate was a PRD
+# document mentioning the phrase. That absence is what makes the "should stale
+# notes decay?" question unanswerable: you cannot decay on disuse without a use
+# signal, and you cannot reinforce on usefulness without one either.
+#
+# This logs, it does not rank. Nothing reads the log yet, deliberately -- the
+# reinforcement weight should be MEASURED against scripts/eval/retrieval_eval.py
+# once there is data, not guessed. (The widely-circulated write-up of this pattern
+# asserts `0.1 * reinforcement` as a magic number; this vault has an eval and can
+# do better than assert.)
+#
+# Two event kinds, deliberately distinguished: `hit` = the note was returned in a
+# ranked result set; `read` = its contents were actually pulled. A hit is weak
+# evidence of usefulness (it competed and placed), a read is strong (something
+# chose it). Collapsing them would make the strong signal unreadable.
+#
+# Fail-open and best-effort: a logging fault must never break a search. Append-only
+# JSONL, one line per event, no read-modify-write, so a crash costs one line.
+_USAGE_LOG = os.environ.get("OBSIDIAN_USAGE_LOG", "").strip()
+
+
+def _usage_log(kind: str, query: str, rows: List[Dict[str, Any]]) -> None:
+    """Append retrieval events. Never raises; disabled unless OBSIDIAN_USAGE_LOG is set."""
+    if not _USAGE_LOG:
+        return
+    try:
+        path = Path(_USAGE_LOG).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        # Truncate the query: this file lives beside a vault carrying confidential
+        # Slack/Gmail content, and a full query log is a second copy of that surface.
+        q = (query or "")[:120]
+        with path.open("a", encoding="utf-8") as fh:
+            for rank, r in enumerate(rows, 1):
+                fh.write(json.dumps({
+                    "at": stamp, "kind": kind, "query": q,
+                    "path": r.get("path"), "rank": rank,
+                }, ensure_ascii=False) + "\n")
+    except Exception:
+        return  # a usage log must never break retrieval
+
+
+def search(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> List[Dict[str, Any]]:
+    """Public search. Delegates to _search_impl and records a usage signal.
+
+    Wrapping rather than logging inline is deliberate: _search_impl has two return
+    branches (fused and pure-lexical) and more may be added. A wrapper cannot miss
+    one; an inline call at each return can, silently.
+    """
+    rows = _search_impl(query, limit=limit, semantic=semantic)
+    _usage_log("hit", query, rows or [])
+    return rows
+
+
 def read_note(rel: str) -> Dict[str, Any]:
     """Read a note by vault-relative path. Guards against escaping the vault."""
     vault = resolve_vault()
@@ -467,6 +527,7 @@ def read_note(rel: str) -> Dict[str, Any]:
     text = _read_safe(target)
     if text is None:
         return {"error": f"not found: {rel}"}
+    _usage_log("read", "", [{"path": rel}])
     return {"path": rel, "content": text[:_READ_CAP]}
 
 
