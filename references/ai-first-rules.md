@@ -119,33 +119,6 @@ More than one row can fire at once - a stale fact *and* the ingestion bug that a
 
 ---
 
-## Correction routing (hard rule)
-
-Rules 1-8 govern how a note is written; the anti-fabrication rules govern how Claude reads before writing. This one governs what happens **after a correction** - when the user fixes a claim, a scheduled run produces a stale answer, or a check fires too late.
-
-The default behaviour is to fix the output and write the lesson into a learnings note. **That is filing an inbox item, not applying a fix.** A learning that lives only in prose gets rediscovered at full cost by the next run that needs it, because obeying prose costs the agent more with every step while a mechanical check costs the same forever. This is a measured failure mode, not a stylistic preference.
-
-**Before writing a correction anywhere, answer two questions in order:**
-
-1. **Why was the wrong thing reachable?** Not "what was wrong" - what let it through. A stale claim in a generated note is rarely a note bug; it is an ingestion step that read the wrong source, a watermark advanced on a partial read, or a rule that was never placed in the step that executes it. Correcting the note leaves the cause live.
-2. **Which layer absorbs it?** Pick a destination from the table and write the fix *there*. The learnings note records that you did it; it is never the only place the fix lands.
-
-| The correction is... | It belongs in |
-|---|---|
-| A wrong or stale **fact** | the owning note - re-derived from the immutable source capture if it came from one |
-| A **choice** that supersedes an earlier one | a `type: decision` note + the affected project note |
-| A **preference or standard** that applies every time | the vault's `_CLAUDE.md`, or these rules |
-| A **technique** worth repeating | the command or skill that performs that work |
-| A **sequence** an agent runs unattended | the executed artifact itself - the step in the prompt that performs it |
-| A **check a machine could run** - anything phrased "always verify X", "never do Y unless Z" | code: a script, plus a test that fails without it |
-| A durable fact about **how to work with this user** | the agent's persistent memory |
-
-**The mechanical-check row is load-bearing.** If a correction can be phrased as a check, prose is the wrong medium no matter how well written - a rule in prose is obeyed at the discretion of a tired agent near the end of a long run, and that is exactly when it is needed. When the fix cannot be landed in code during the current run, still write it as a named artifact and an assertion ("script X should assert <condition> and exit non-zero"), never as an adjective. **A counter beats an adjective.**
-
-More than one row can fire at once - a stale fact *and* the ingestion bug that admitted it. Write both. But a learnings bullet with no destination behind it closes nothing, so mark it `UNROUTED` and let the periodic learnings review drain it.
-
----
-
 ## Type Schemas
 
 Frontmatter schemas by note type. **Add fields specific to your type - never remove the universal fields.**
