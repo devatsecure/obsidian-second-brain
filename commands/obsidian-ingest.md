@@ -91,8 +91,11 @@ The argument is a URL, file path, or pasted text. If no argument, ask what to in
    
    - **Contradictions agent**: for each claim in the new source:
      - Search the vault for CONFLICTING claims in existing pages
-     - If contradiction found: UPDATE the existing page to note the conflict, add the new evidence, and mark which claim is more recent/authoritative
-     - If the new source SUPERSEDES old info: rewrite the old page with updated info and note what changed and why in the page's history section
+     - First confirm the conflicting page is about the SAME subject. Two entities that share a name, a person's namesake, or a related-but-different thing (e.g. a resident ID card vs a work-residence permit) are not a contradiction - REJECT the new claim for that page rather than absorbing it. "Related" is not "same".
+     - Then decide by evidence strength, never by recency alone (the newer claim is not automatically right):
+       - **Clear and directly supported** - the new source explicitly supersedes or negates the old claim, and the source text itself says so (not an inference from it): REWRITE the claim in the body to the updated version, and add a `## Contradictions and updates` section (create it if absent) with one line: old claim, new claim, source, date. Note the change in the page's history section.
+       - **Ambiguous, unsettled, or only inferred** - the conflict is real but the new source does not directly settle it: do NOT overwrite the existing claim. Add the conflict to `## Contradictions and updates` only, quoting both claims with their sources and dates, and mark it `unresolved`. The body keeps the existing claim until a source settles it.
+     - Never invent, stitch together, or infer information that is not explicitly present in the new source to resolve a conflict. An unresolved contradiction that is recorded is worth more than a resolved one that was guessed.
 
 7. Update structural files:
    - REBUILD `index.md` - don't just append. Regenerate the sections that changed so descriptions stay current with the rewritten pages.
@@ -101,14 +104,14 @@ The argument is a URL, file path, or pasted text. If no argument, ask what to in
 8. Update today's daily note with:
    - What was ingested
    - What pages were REWRITTEN (not just created - this is the important part)
-   - Any contradictions found and how they were resolved
+   - Any contradictions found and how they were resolved - and which were recorded as `unresolved` (these are not failures; they are the honest state)
    - Any new synthesis pages created from emerging patterns
 
 9. Report back:
    - Source title and type
    - **New pages created** (list)
    - **Existing pages rewritten** (list with what changed)
-   - **Contradictions resolved** (list with old claim vs new claim)
+   - **Contradictions resolved** (list with old claim vs new claim) and **contradictions recorded as unresolved** (list, with what evidence would settle each)
    - **Synthesis pages created** (patterns that emerged from this + existing knowledge)
 
 The vault should be DIFFERENT after every ingest - not just bigger. Pages that existed before should be smarter, more connected, and more current. If an ingest only creates new pages and doesn't rewrite anything, it wasn't deep enough.
