@@ -40,9 +40,12 @@ def obsidian_search(query: str, limit: int = 6) -> str:
 
 
 @mcp.tool()
-def obsidian_read_note(path: str) -> str:
-    """Read the full content of a vault note by its vault-relative path."""
-    return json.dumps(vault_ops.read_note(path))
+def obsidian_read_note(path: str, offset: int = 0) -> str:
+    """Read a vault note by its vault-relative path, up to 20,000 characters per call.
+
+    If the result has "truncated": true, the note is longer: call again with
+    offset=<next_offset> until truncated is false. total_chars gives the full length."""
+    return json.dumps(vault_ops.read_note(path, offset=offset))
 
 
 @mcp.tool()

@@ -520,8 +520,12 @@ def search(query: str, *, limit: int = 6, semantic: Optional[bool] = None) -> Li
     return rows
 
 
-def read_note(rel: str) -> Dict[str, Any]:
-    """Read a note by vault-relative path. Guards against escaping the vault."""
+def read_note(rel: str, offset: int = 0) -> Dict[str, Any]:
+    """Read a note by vault-relative path, one page of _READ_CAP chars at a time.
+
+    Every result says whether it is the whole note: `truncated`, `total_chars`, and
+    `next_offset` (None on the last page). A long note used to come back cut at
+    20,000 chars with no flag, so callers believed they had read all of it."""
     vault = resolve_vault()
     rel = (rel or "").strip()
     if not rel:
@@ -532,8 +536,15 @@ def read_note(rel: str) -> Dict[str, Any]:
     text = _read_safe(target)
     if text is None:
         return {"error": f"not found: {rel}"}
-    _usage_log("read", "", [{"path": rel}])
-    return {"path": rel, "content": text[:_READ_CAP]}
+    if not isinstance(offset, int) or offset < 0 or (offset and offset >= len(text)):
+        return {"error": f"offset {offset!r} is outside the note (total_chars={len(text)})"}
+    if offset == 0:
+        _usage_log("read", "", [{"path": rel}])
+    end = offset + _READ_CAP
+    truncated = end < len(text)
+    return {"path": rel, "content": text[offset:end], "offset": offset,
+            "total_chars": len(text), "truncated": truncated,
+            "next_offset": end if truncated else None}
 
 
 def save_note(
