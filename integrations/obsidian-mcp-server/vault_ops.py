@@ -34,6 +34,11 @@ _NOTES_DIR = "Inbox"
 _SKIP_DIRS = {".obsidian", ".git", ".trash", "_trash", ".claude", "_export",
               "templates", "node_modules"}
 
+# Folders no MCP tool may WRITE into, compared case-insensitively. Separate from
+# _SKIP_DIRS on purpose: raw/ sources stay searchable and readable, they are just
+# immutable (the vault rule: derived notes live elsewhere and link back).
+_WRITE_PROTECTED_DIRS = {"raw"}
+
 # Operational logs and immutable raw sources are rarely the *answer* to a query:
 # they are long and term-dense, so without a penalty they dominate term-frequency
 # ranking and bury short canonical notes (measured: 0% recall@10 before this - see
@@ -602,6 +607,8 @@ def update_note(
         return {"error": "path is outside the vault"}
     if set(target.relative_to(vault).parts) & _SKIP_DIRS:
         return {"error": "path is in a protected directory"}
+    if any(p.lower() in _WRITE_PROTECTED_DIRS for p in target.relative_to(vault).parts[:-1]):
+        return {"error": "path is in a write-protected directory (raw/ sources are immutable)"}
     text = _read_safe(target)
     if text is None:
         return {"error": f"not found: {rel} (update_note only edits existing notes)"}
