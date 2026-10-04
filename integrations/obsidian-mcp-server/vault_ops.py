@@ -570,7 +570,20 @@ def save_note(
         f"{preamble}\n\n"
         f"{content}\n"
     )
-    path.write_text(body, encoding="utf-8")
+    # Exclusive create: a same-day title clash (or two titles that slug the same)
+    # gets " (2)", " (3)"... instead of silently replacing the earlier note.
+    stem = path.stem
+    for n in range(1, 1000):
+        if n > 1:
+            path = inbox / f"{stem} ({n}).md"
+        try:
+            with path.open("x", encoding="utf-8") as fh:
+                fh.write(body)
+            break
+        except FileExistsError:
+            continue
+    else:
+        return {"error": f"too many notes named {stem!r} today"}
     return {"saved": path.relative_to(vault).as_posix()}
 
 
